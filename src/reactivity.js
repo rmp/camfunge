@@ -12,3 +12,12 @@ export function sceneSignal(rgba, prevLuma, mode) {
   const raw = mode === 'colour' ? (chroma / n - 0.1) * 2.5 : (motion / n - 0.01) * 12;
   return { signal: Math.min(1, Math.max(0, raw)), luma };
 }
+
+/** Scores a block of time-domain audio samples (-1..1) 0..1 by loudness. */
+export function soundSignal(samples) {
+  let sum = 0;
+  for (const s of samples) sum += s * s;
+  const rms = Math.sqrt(sum / samples.length);
+  // ponytail: fixed noise floor and gain; mic-gain calibration if quiet rooms read hot
+  return Math.min(1, Math.max(0, (rms - 0.01) * 8));
+}

@@ -4,5 +4,7 @@
 <dict>
   <key>NSCameraUsageDescription</key>
   <string>CamFunge bends your camera feed into psychedelic shapes.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>CamFunge makes its filters pulse to the sound around you.</string>
 </dict>
 </plist>

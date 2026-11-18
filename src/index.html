@@ -32,13 +32,13 @@
   <label>Trip <select id="filter"></select></label>
   <label>Intensity <input id="amt" type="range" min="0" max="1" step="0.01" value="0.6"></label>
   <label>Speed <input id="speed" type="range" min="0" max="3" step="0.01" value="1"></label>
-  <label>React to <select id="reactTo"><option value="movement">Movement</option><option value="colour">Colour</option></select></label>
+  <label>React to <select id="reactTo"><option value="movement">Movement</option><option value="colour">Colour</option><option value="sound">Sound</option></select></label>
   <label>Reactivity <input id="reactivity" type="range" min="0" max="1" step="0.01" value="0.5"> <meter id="level" aria-label="Reaction level"></meter></label>
   <label><input id="auto" type="checkbox"> Auto-cycle</label>
   <kbd>← → trip · H hide</kbd>
 </nav>
 <script type="module">
-import { sceneSignal } from './reactivity.js';
+import { sceneSignal, soundSignal } from './reactivity.js';
 
 const PRELUDE = `
 precision highp float;
@@ -277,6 +277,32 @@ function sampleVideo() {
   return probeCtx.getImageData(0, 0, probe.width, probe.height).data;
 }
 
+let analyser, samples;
+async function startMic() {
+  if (analyser) return;
+  let mic;
+  try {
+    mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    say(`No microphone: ${e.message}\n\nCheck System Settings → Privacy & Security → Microphone.`);
+    setTimeout(() => say(''), 4000);
+    reactTo.value = 'movement';
+    return;
+  }
+  const audio = new AudioContext();
+  await audio.resume();
+  analyser = audio.createAnalyser();
+  analyser.fftSize = 1024;
+  samples = new Float32Array(analyser.fftSize);
+  audio.createMediaStreamSource(mic).connect(analyser);
+}
+
+function soundLevel() {
+  if (!analyser) return 0;
+  analyser.getFloatTimeDomainData(samples);
+  return soundSignal(samples);
+}
+
 function draw(prog, camScale, time, amount) {
   gl.useProgram(prog.p);
   gl.uniform1i(prog.u.uCam, 0);
@@ -302,8 +328,9 @@ function frame(now) {
   if (auto.checked && now - lastSwitch > 15000) selectFilter(current + 1);
   if (video.readyState < 2) return;
 
-  const { signal, luma } = sceneSignal(sampleVideo(), prevLuma, reactTo.value);
-  prevLuma = luma;
+  const scene = sceneSignal(sampleVideo(), prevLuma, reactTo.value);
+  prevLuma = scene.luma;
+  const signal = reactTo.value === 'sound' ? soundLevel() : scene.signal;
   level += (signal - level) * (signal > level ? 0.5 : 0.05);
   meter.value = level;
   const boost = +reactivity.value * level, amount = Math.min(1, +amt.value + boost);
@@ -350,6 +377,7 @@ async function startCamera(deviceId) {
 }
 
 camSelect.onchange = () => startCamera(camSelect.value);
+reactTo.onchange = () => reactTo.value === 'sound' && startMic();
 filterSelect.onchange = () => selectFilter(+filterSelect.value);
 navigator.mediaDevices?.addEventListener('devicechange', listCameras);
 addEventListener('keydown', e => {
