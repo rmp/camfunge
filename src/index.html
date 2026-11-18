@@ -44,7 +44,7 @@ const PRELUDE = `
 precision highp float;
 uniform sampler2D uCam, uPrev;
 uniform vec2 uRes, uCamScale;
-uniform float uTime, uAmt;
+uniform float uTime, uAmt, uClock;
 varying vec2 vUv;
 vec3 cam(vec2 uv) { uv = (uv - 0.5) * uCamScale + 0.5; return texture2D(uCam, vec2(1.0 - uv.x, uv.y)).rgb; }
 vec3 prev(vec2 uv) { return texture2D(uPrev, uv).rgb; }
@@ -59,6 +59,10 @@ vec3 rgb2hsv(vec3 c) {
   return vec3(abs(q.z + (q.w - q.y) / (6.0 * d + 1e-10)), d / (q.x + 1e-10), q.x);
 }
 vec3 hsv2rgb(vec3 c) { vec3 p = abs(fract(c.xxx + vec3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0); return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y); }
+float halftone(vec2 uv, float angle, float cells, float ink) {
+  vec2 f = fract(rot(angle) * uv * cells) - 0.5;
+  return 1.0 - smoothstep(-0.05, 0.05, length(f) - sqrt(ink) * 0.55);
+}
 vec3 palette(float t) { return 0.5 + 0.5 * cos(6.2831 * (t + vec3(0.0, 0.33, 0.67))); }
 vec2 grad(vec2 uv) {
   vec2 e = 1.5 / uRes;
@@ -101,6 +105,23 @@ const FILTERS = [
     vec3 melted = prev(vUv + vec2(0.0, 0.003 + 0.004 * drip)) * 0.94;
     gl_FragColor = vec4(mix(c, max(c, melted), 0.75), 1.0);` },
 
+  { name: 'Helter Skelter', artist: 'The Beatles', src: `
+    vec2 aspect = vec2(uRes.x / uRes.y, 1.0);
+    float zoom = 1.0 + 2.0 * uAmt * (0.6 + 0.4 * sin(uTime));
+    vec2 uv = rot(uTime * 0.3) * (vUv - 0.5) * aspect * zoom / aspect + 0.5;
+    vec3 h = rgb2hsv(cam(uv));
+    h.x = fract(h.x + dot(floor(uv), vec2(0.25, 0.5)) + uTime * 0.05);
+    h.y = min(1.0, h.y * 1.5 + 0.2);
+    gl_FragColor = vec4(hsv2rgb(h), 1.0);` },
+
+  { name: 'Sgt. Pepper', artist: 'The Beatles', src: `
+    vec2 uv = vUv * vec2(uRes.x / uRes.y, 1.0);
+    float cells = mix(110.0, 35.0, uAmt) * (1.0 + 0.1 * sin(uTime));
+    vec3 ink = 1.0 - cam(vUv);
+    vec3 dots = vec3(halftone(uv, 0.26, cells, ink.r), halftone(uv, 1.31, cells, ink.g), halftone(uv, 0.79, cells, ink.b));
+    vec3 paper = palette(uTime * 0.03) * 0.25 + 0.75;
+    gl_FragColor = vec4(paper * (1.0 - dots), 1.0);` },
+
   { name: 'Purple Haze', artist: 'Jimi Hendrix', src: `
     vec2 w = vec2(sin(vUv.y * 8.0 + uTime * 1.3) + sin(vUv.y * 3.0 - uTime),
                   cos(vUv.x * 7.0 - uTime * 1.1) + cos(vUv.x * 2.0 + uTime * 0.7));
@@ -118,6 +139,18 @@ const FILTERS = [
     vec3 c = cam(vUv);
     vec3 solar = abs(c - 0.5 + 0.5 * sin(uTime * 0.5)) * (1.0 - uAmt) * 0.6;
     gl_FragColor = vec4(max(neon + solar, prev(vUv) * (0.6 + 0.3 * uAmt)), 1.0);` },
+
+  { name: 'Fire', artist: 'Jimi Hendrix', src: `
+    float heat = luma(cam(vUv)) + 0.12 * sin(uTime * 3.0 + vUv.y * 20.0);
+    vec3 thermal = clamp(vec3(heat * 3.0, heat * 3.0 - 1.0, heat * 3.0 - 2.0), 0.0, 1.0);
+    vec2 rise = vec2(0.003 * sin(vUv.y * 40.0 + uTime * 6.0), -0.004 - 0.006 * uAmt);
+    vec3 flames = prev(vUv + rise) * vec3(0.97, 0.88, 0.7);
+    gl_FragColor = vec4(max(thermal, flames * (0.6 + 0.35 * uAmt)), 1.0);` },
+
+  { name: 'Voodoo Child', artist: 'Jimi Hendrix', src: `
+    vec3 c = cam(vUv), p = prev(vUv);
+    vec3 o = vec3(c.r, mix(p.g, c.g, mix(0.5, 0.12, uAmt)), mix(p.b, c.b, mix(0.3, 0.05, uAmt)));
+    gl_FragColor = vec4(mix(vec3(luma(o)), o, 1.7), 1.0);` },
 
   { name: 'Piece of My Heart', artist: 'Janis Joplin', src: `
     vec2 p = vUv - 0.5;
@@ -139,6 +172,13 @@ const FILTERS = [
     float rings = 0.5 + 0.5 * sin(r * 40.0 - uTime * 4.0 + luma(c) * 6.0);
     vec3 paisley = palette(luma(c) + r + uTime * 0.07);
     gl_FragColor = vec4(mix(c, paisley * (0.6 + 0.4 * rings), 0.35 + 0.6 * uAmt), 1.0);` },
+
+  { name: 'Summertime', artist: 'Janis Joplin', src: `
+    float band = floor(vUv.y * mix(6.0, 30.0, uAmt));
+    float off = sin(band * 1.7 + uTime * 2.0) * 0.04 * uAmt + sin(vUv.y * 120.0 + uTime * 8.0) * 0.003;
+    vec3 c = vec3(cam(vUv + vec2(off * 1.4, 0.0)).r, cam(vUv + vec2(off, 0.0)).g, cam(vUv + vec2(off * 0.6, 0.0)).b);
+    c = mix(c, c * vec3(1.1, 0.85, 0.95) + vec3(0.12, 0.05, 0.1), 0.6);
+    gl_FragColor = vec4(c * (0.92 + 0.08 * sin(band * 3.0 + uTime * 4.0)), 1.0);` },
 
   { name: 'Dark Side of the Moon', artist: 'Pink Floyd', src: `
     vec2 dir = vec2(cos(uTime * 0.3), sin(uTime * 0.3)) * 0.04 * uAmt;
@@ -162,6 +202,29 @@ const FILTERS = [
     vec3 c = cam(vUv);
     float edge = smoothstep(0.04, 0.2, length(grad(vUv)));
     gl_FragColor = vec4(mix(tunnel, c, max(edge, mix(0.3, 0.04, uAmt))), 1.0);` },
+
+  { name: 'Interstellar Overdrive', artist: 'Pink Floyd', src: `
+    float shift = floor(1.0 + 7.0 * uAmt) / uRes.x;
+    vec3 h = rgb2hsv(prev(vUv + vec2(shift, 0.0)));
+    h.x = fract(h.x + 0.003);
+    vec3 scan = vUv.x > 1.0 - shift ? cam(vec2(0.5, vUv.y)) : hsv2rgb(h);
+    gl_FragColor = vec4(scan, 1.0);` },
+
+  { name: 'Shine On You Crazy Diamond', artist: 'Pink Floyd', src: `
+    vec2 centre = 0.5 + 0.25 * vec2(sin(uTime * 0.4), cos(uTime * 0.3));
+    vec2 stride = (vUv - centre) * 0.03 * (0.5 + uAmt);
+    vec3 acc = vec3(0.0);
+    float weight = 1.0, total = 0.0;
+    vec2 uv = vUv;
+    for (int i = 0; i < 24; i++) {
+      vec3 s = cam(uv);
+      acc += s * smoothstep(0.45, 0.9, luma(s)) * weight;
+      total += weight;
+      weight *= 0.93;
+      uv -= stride;
+    }
+    vec3 rays = acc / total * 3.0 * (0.6 + 0.4 * palette(length(vUv - centre) * 2.0 - uTime * 0.2));
+    gl_FragColor = vec4(cam(vUv) * 0.55 + rays, 1.0);` },
 
   { name: 'Dragula', artist: 'Rob Zombie', src: `
     float tick = floor(uTime * 12.0), line = floor(vUv.y * 90.0);
@@ -187,6 +250,23 @@ const FILTERS = [
     duo = mix(duo, vec3(1.0, 0.0, 0.15), step(0.97 - 0.15 * uAmt, hash(floor(vUv * 40.0) + floor(uTime * 6.0))) * step(l, 0.4));
     vec3 ghost = prev(vUv + vec2(0.002 * sin(uTime * 2.0), 0.0)) * 0.85;
     gl_FragColor = vec4(max(duo, ghost * uAmt), 1.0);` },
+
+  { name: 'Superbeast', artist: 'Rob Zombie', src: `
+    float size = mix(12.0, 48.0, uAmt);
+    vec2 blk = floor(vUv * uRes / size);
+    float tick = floor(uTime * 8.0);
+    vec2 drift = (vec2(hash(blk + tick + 1.3), hash(blk + tick + 7.1)) - 0.5) * 0.02;
+    vec3 o = mix(cam(vUv), prev(vUv + drift), step(1.0 - 0.6 * uAmt, hash(blk + tick)));
+    if (hash(blk * 1.7 + tick) > 0.93) o = cam((blk + 0.5) * size / uRes).brg;
+    gl_FragColor = vec4(o, 1.0);` },
+
+  { name: "Thunder Kiss '65 (flashing)", artist: 'Rob Zombie', src: `
+    float beats = uClock * 2.5;
+    float beat = fract(beats), tick = floor(beats);
+    vec3 c = cam(vUv);
+    vec3 flash = hsv2rgb(vec3(hash(vec2(tick, 1.0)), 0.9, 1.0));
+    vec3 o = mix(c, step(0.45, luma(c)) * flash, 0.4 + 0.6 * uAmt);
+    gl_FragColor = vec4(o * (1.0 + 0.6 * uAmt * exp(-beat * 10.0)), 1.0);` },
 ];
 
 const BLIT = `gl_FragColor = vec4(prev(vUv), 1.0);`;
@@ -220,7 +300,7 @@ function program(name, body) {
   gl.bindAttribLocation(p, 0, 'p');
   gl.linkProgram(p);
   const u = {};
-  for (const n of ['uCam', 'uPrev', 'uRes', 'uCamScale', 'uTime', 'uAmt']) u[n] = gl.getUniformLocation(p, n);
+  for (const n of ['uCam', 'uPrev', 'uRes', 'uCamScale', 'uTime', 'uAmt', 'uClock']) u[n] = gl.getUniformLocation(p, n);
   return { p, u };
 }
 
@@ -311,6 +391,7 @@ function draw(prog, camScale, time, amount) {
   gl.uniform2fv(prog.u.uCamScale, camScale);
   gl.uniform1f(prog.u.uTime, time);
   gl.uniform1f(prog.u.uAmt, amount);
+  gl.uniform1f(prog.u.uClock, performance.now() / 1000);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
