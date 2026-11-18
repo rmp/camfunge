@@ -18,6 +18,7 @@
   select { background: rgba(0, 0, 0, .4); color: inherit; border: 1px solid rgba(255, 255, 255, .25); border-radius: 6px; padding: 3px 6px; max-width: 260px; }
   input[type=range] { width: 110px; accent-color: #ff3cac; }
   input[type=checkbox] { accent-color: #ff3cac; }
+  meter { width: 40px; }
   kbd { opacity: .6; font-size: 11px; }
 </style>
 </head>
@@ -31,10 +32,14 @@
   <label>Trip <select id="filter"></select></label>
   <label>Intensity <input id="amt" type="range" min="0" max="1" step="0.01" value="0.6"></label>
   <label>Speed <input id="speed" type="range" min="0" max="3" step="0.01" value="1"></label>
+  <label>React to <select id="reactTo"><option value="movement">Movement</option><option value="colour">Colour</option></select></label>
+  <label>Reactivity <input id="reactivity" type="range" min="0" max="1" step="0.01" value="0.5"> <meter id="level" aria-label="Reaction level"></meter></label>
   <label><input id="auto" type="checkbox"> Auto-cycle</label>
   <kbd>← → trip · H hide</kbd>
 </nav>
-<script>
+<script type="module">
+import { sceneSignal } from './reactivity.js';
+
 const PRELUDE = `
 precision highp float;
 uniform sampler2D uCam, uPrev;
@@ -190,6 +195,7 @@ const VS = `attribute vec2 p; varying vec2 vUv; void main() { vUv = p * 0.5 + 0.
 const $ = s => document.querySelector(s);
 const canvas = $('#c'), video = $('#video'), msg = $('#msg'), bar = $('#bar');
 const camSelect = $('#cam'), filterSelect = $('#filter'), amt = $('#amt'), speed = $('#speed'), auto = $('#auto');
+const reactTo = $('#reactTo'), reactivity = $('#reactivity'), meter = $('#level');
 const say = text => { msg.textContent = text; };
 
 const gl = canvas.getContext('webgl2', { antialias: false });
@@ -264,14 +270,21 @@ function coverScale() {
   return canvasAspect > videoAspect ? [1, videoAspect / canvasAspect] : [canvasAspect / videoAspect, 1];
 }
 
-function draw(prog, camScale, time) {
+const probe = Object.assign(document.createElement('canvas'), { width: 64, height: 36 });
+const probeCtx = probe.getContext('2d', { willReadFrequently: true });
+function sampleVideo() {
+  probeCtx.drawImage(video, 0, 0, probe.width, probe.height);
+  return probeCtx.getImageData(0, 0, probe.width, probe.height).data;
+}
+
+function draw(prog, camScale, time, amount) {
   gl.useProgram(prog.p);
   gl.uniform1i(prog.u.uCam, 0);
   gl.uniform1i(prog.u.uPrev, 1);
   gl.uniform2f(prog.u.uRes, canvas.width, canvas.height);
   gl.uniform2fv(prog.u.uCamScale, camScale);
   gl.uniform1f(prog.u.uTime, time);
-  gl.uniform1f(prog.u.uAmt, +amt.value);
+  gl.uniform1f(prog.u.uAmt, amount);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
@@ -281,13 +294,20 @@ function selectFilter(i) {
   lastSwitch = performance.now();
 }
 
-let time = 0, last = performance.now(), lastSwitch = last;
+let time = 0, last = performance.now(), lastSwitch = last, prevLuma = null, level = 0;
 function frame(now) {
   requestAnimationFrame(frame);
-  time += (now - last) / 1000 * +speed.value;
+  const dt = (now - last) / 1000;
   last = now;
   if (auto.checked && now - lastSwitch > 15000) selectFilter(current + 1);
   if (video.readyState < 2) return;
+
+  const { signal, luma } = sceneSignal(sampleVideo(), prevLuma, reactTo.value);
+  prevLuma = luma;
+  level += (signal - level) * (signal > level ? 0.5 : 0.05);
+  meter.value = level;
+  const boost = +reactivity.value * level, amount = Math.min(1, +amt.value + boost);
+  time += dt * +speed.value * (1 + 2 * boost);
   resize();
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, camTex);
@@ -298,11 +318,11 @@ function frame(now) {
   gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
   gl.activeTexture(gl.TEXTURE1);
   gl.bindTexture(gl.TEXTURE_2D, buffers[read].tex);
-  draw(programs[current], camScale, time);
+  draw(programs[current], camScale, time, amount);
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.bindTexture(gl.TEXTURE_2D, out.tex);
-  draw(blit, camScale, time);
+  draw(blit, camScale, time, amount);
   read = 1 - read;
 }
 
