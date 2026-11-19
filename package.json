@@ -5,10 +5,15 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
-    "test": "node --test",
-    "check:render": "node render-check.mjs"
+    "service": "cargo run -p camfunge-service --",
+    "test": "npm run test:service && npm run test:client",
+    "test:service": "cargo test -p camfunge-service",
+    "test:client": "cargo build -p camfunge-service && node --test \"tests/*.test.mjs\"",
+    "check:gui": "cargo build -p camfunge-service && node tests/gui-check.mjs",
+    "check:vcam": "cargo build -p camfunge-service && node tests/gui-check.mjs --vcam"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
-  }
+  },
+  "type": "module"
 }
