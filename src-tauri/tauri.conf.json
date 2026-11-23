@@ -3,14 +3,19 @@
   "productName": "CamFunge",
   "version": "0.1.0",
   "identifier": "dev.camfunge.app",
-  "build": { "frontendDist": "../src" },
+  "build": {
+    "frontendDist": "../src",
+    "beforeDevCommand": "node scripts/build-service.mjs",
+    "beforeBuildCommand": "node scripts/build-service.mjs --release"
+  },
   "app": {
-    "windows": [{ "title": "CamFunge", "width": 1280, "height": 800, "minWidth": 480, "minHeight": 320 }],
+    "windows": [],
     "security": { "csp": null }
   },
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/camfunge-service"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
   }
 }

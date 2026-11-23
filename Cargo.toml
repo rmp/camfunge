@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["service", "src-tauri"]
+default-members = ["service"]
+
+[profile.dev.package."*"]
+# Camera decoding, JPEG encoding and shader compilation are unbearably slow unoptimised.
+opt-level = 2
+
+[profile.dev.package.camfunge-service]
+# Pixel conversion loops run per frame; unoptimised they cannot keep up with 30 fps.
+opt-level = 2

@@ -1,0 +1,35 @@
+[package]
+name = "camfunge-service"
+version = "0.1.0"
+edition = "2021"
+description = "Headless CamFunge engine: camera in, psychedelic filters, virtual camera out."
+
+[lib]
+name = "camfunge"
+path = "src/lib.rs"
+
+[[bin]]
+name = "camfunge-service"
+path = "src/main.rs"
+
+[dependencies]
+wgpu = { version = "30", default-features = false, features = ["glsl", "wgsl", "metal", "vulkan", "dx12", "gles"] }
+pollster = "1"
+nokhwa = { version = "0.10", features = ["input-native"] }
+cpal = "0.18"
+tungstenite = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jpeg-encoder = "0.7"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+ctrlc = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Memory", "Win32_Security"] }
+
+[dev-dependencies]
+naga = { version = "30", features = ["glsl-in", "wgsl-in"] }
