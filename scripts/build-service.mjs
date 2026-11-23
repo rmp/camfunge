@@ -10,9 +10,12 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const release = process.argv.includes('--release');
 const run = (cmd, args) => execFileSync(cmd, args, { cwd: root, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' });
 
-run('cargo', ['build', '-p', 'camfunge-service', ...(release ? ['--release'] : [])]);
-const triple = run('rustc', ['-vV']).match(/^host: (\S+)/m)[1];
+const host = run('rustc', ['-vV']).match(/^host: (\S+)/m)[1];
+// Set by the Tauri CLI; differs from the host under `tauri build --target`.
+const triple = process.env.TAURI_ENV_TARGET_TRIPLE || host;
+const cross = triple !== host;
+run('cargo', ['build', '-p', 'camfunge-service', ...(release ? ['--release'] : []), ...(cross ? ['--target', triple] : [])]);
 const ext = process.platform === 'win32' ? '.exe' : '';
 mkdirSync(`${root}/src-tauri/binaries`, { recursive: true });
-copyFileSync(`${root}/target/${release ? 'release' : 'debug'}/camfunge-service${ext}`, `${root}/src-tauri/binaries/camfunge-service-${triple}${ext}`);
+copyFileSync(`${root}/target/${cross ? `${triple}/` : ''}${release ? 'release' : 'debug'}/camfunge-service${ext}`, `${root}/src-tauri/binaries/camfunge-service-${triple}${ext}`);
 console.log(`staged camfunge-service for ${triple}`);
