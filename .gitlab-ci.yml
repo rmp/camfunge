@@ -1,0 +1,210 @@
+# CamFunge — GitLab CI/CD
+#
+#   test    → service unit + GPU tests (Mesa lavapipe), GUI protocol client against a real service
+#   package → Tauri bundles: .deb amd64/arm64 (Docker), .dmg arm64/x64 (macOS runner), NSIS .exe x64/arm64 (Windows runner)
+#
+# macOS uses the GitLab.com hosted macOS runner; Windows a self-managed Windows 11 shell runner (PowerShell, tag win64).
+# Runner tags are variables, so other runners can be used by overriding them in CI/CD settings.
+#
+# Windows runner host prerequisites (the jobs install Node and Rust themselves, but not these):
+#   - PowerShell 7 installed machine-wide from the MSI
+#   - Visual Studio 2022 Build Tools: "Desktop development with C++" + "MSVC v143 ARM64 build tools" + a Windows SDK
+#   - Git for Windows with `git config --system core.longpaths true`; outbound HTTPS to nodejs.org, static.rust-lang.org,
+#     crates.io, registry.npmjs.org and github.com (Tauri downloads NSIS)
+#
+# Bundles are unsigned.
+
+stages: [test, package]
+
+workflow:
+  name: '$PIPELINE_NAME'
+  auto_cancel:
+    on_new_commit: interruptible
+  rules:
+    - if: $CI_COMMIT_TAG
+      variables: { PIPELINE_NAME: 'Release $CI_COMMIT_TAG' }
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      variables: { PIPELINE_NAME: 'MR !$CI_MERGE_REQUEST_IID: $CI_MERGE_REQUEST_TITLE' }
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS # avoid duplicate branch + MR pipelines
+      when: never
+    - if: $CI_COMMIT_BRANCH
+      variables: { PIPELINE_NAME: '$CI_COMMIT_REF_NAME: $CI_COMMIT_TITLE' }
+
+variables:
+  NODE_MAJOR: "24"
+  RUST_IMAGE: rust:1-trixie
+  # Runner tags (GitLab.com hosted runners by default)
+  RUNNER_LINUX_AMD64: saas-linux-medium-amd64
+  RUNNER_LINUX_ARM64: saas-linux-medium-arm64
+  RUNNER_MACOS: saas-macos-medium-m1
+  MACOS_IMAGE: macos-15-xcode-16
+  RUNNER_WINDOWS: win64
+  # Tooling
+  npm_config_cache: $CI_PROJECT_DIR/.npm
+  npm_config_audit: "false"
+  npm_config_fund: "false"
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  FF_USE_FASTZIP: "true"
+  ARTIFACT_COMPRESSION_LEVEL: fast
+  CACHE_COMPRESSION_LEVEL: fast
+
+default:
+  interruptible: true
+  retry:
+    max: 2
+    when: [runner_system_failure, stuck_or_timeout_failure, scheduler_failure, api_failure]
+
+# ---------------------------------------------------------------------------------------------------------------
+# Reusable rule sets & templates
+# ---------------------------------------------------------------------------------------------------------------
+
+.if-release-tag: &if-release-tag
+  if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/
+.if-default-branch: &if-default-branch
+  if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+.if-mr: &if-mr
+  if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+.linux-amd64:
+  tags: [$RUNNER_LINUX_AMD64]
+
+# Rust image + Node, ALSA (cpal), libclang (v4l bindgen) and the Tauri/WebKitGTK build deps.
+.linux:
+  image: $RUST_IMAGE
+  variables:
+    CARGO_HOME: $CI_PROJECT_DIR/.cargo-home # cacheable; rustup/toolchains stay in the image
+  cache:
+    - key: { prefix: npm, files: [package-lock.json] }
+      paths: [.npm/]
+    - key: { prefix: cargo-$ARCH-$CI_JOB_STAGE, files: [Cargo.lock] }
+      paths: [.cargo-home/registry/index/, .cargo-home/registry/cache/, .cargo-home/git/db/, target/]
+  before_script:
+    - curl -fsSL "https://deb.nodesource.com/setup_$NODE_MAJOR.x" | bash -
+    - >
+      apt-get install -y --no-install-recommends nodejs libasound2-dev libclang-dev
+      libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      mesa-vulkan-drivers file
+    - npm ci --prefer-offline --no-audit
+
+# ---------------------------------------------------------------------------------------------------------------
+# test
+# ---------------------------------------------------------------------------------------------------------------
+
+test:
+  stage: test
+  extends: [.linux, .linux-amd64]
+  variables: { ARCH: amd64, CAMFUNGE_REQUIRE_GPU: "1" }
+  script:
+    - npm test
+
+# ---------------------------------------------------------------------------------------------------------------
+# package — unsigned installers
+#   tags + default branch: Linux/Windows always; macOS manual on the default branch to save hosted minutes
+#   merge requests:        manual
+# ---------------------------------------------------------------------------------------------------------------
+
+.package-rules-auto:
+  rules:
+    - *if-release-tag
+    - *if-default-branch
+    - <<: *if-mr
+      when: manual
+      allow_failure: true
+
+.package-rules-hosted:
+  rules:
+    - *if-release-tag
+    - <<: *if-default-branch
+      when: manual
+      allow_failure: true
+    - <<: *if-mr
+      when: manual
+      allow_failure: true
+
+.package:
+  stage: package
+  needs: [test]
+  interruptible: false
+  timeout: 90m
+  artifacts:
+    name: $CI_JOB_NAME_SLUG-$CI_COMMIT_SHORT_SHA
+    expire_in: 30 days
+
+.package:linux:
+  extends: [.linux, .package, .package-rules-auto]
+  script:
+    - npx tauri build --bundles deb
+    - dpkg-deb --info target/release/bundle/deb/*.deb | head -20
+  artifacts:
+    paths: [target/release/bundle/deb/*.deb]
+
+package:linux:amd64:
+  extends: [.package:linux, .linux-amd64]
+  variables: { ARCH: amd64 }
+
+package:linux:arm64:
+  extends: .package:linux
+  tags: [$RUNNER_LINUX_ARM64]
+  image: { name: $RUST_IMAGE, docker: { platform: linux/arm64 } } # emulated on an x86_64 runner
+  variables: { ARCH: arm64 }
+  timeout: 180m
+
+package:macos:
+  extends: [.package, .package-rules-hosted]
+  tags: [$RUNNER_MACOS]
+  image: $MACOS_IMAGE
+  cache:
+    - key: { prefix: npm-macos, files: [package-lock.json] }
+      paths: [.npm/]
+  before_script:
+    - command -v node >/dev/null && node --version | grep -q "^v$NODE_MAJOR\." || { brew install "node@$NODE_MAJOR" && brew link --overwrite --force "node@$NODE_MAJOR"; }
+    - command -v rustup >/dev/null || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+    - source "$HOME/.cargo/env"
+    - rustup target add aarch64-apple-darwin x86_64-apple-darwin
+    - npm ci --prefer-offline --no-audit
+  script:
+    - npx tauri build --target aarch64-apple-darwin --bundles dmg
+    - npx tauri build --target x86_64-apple-darwin --bundles dmg
+  artifacts:
+    paths: [target/*/release/bundle/dmg/*.dmg]
+
+.package:windows:
+  extends: [.package, .package-rules-auto]
+  tags: [$RUNNER_WINDOWS]
+  cache:
+    - key: { prefix: npm-windows, files: [package-lock.json] }
+      paths: [.npm/]
+  before_script:
+    - $ErrorActionPreference = "Stop"
+    - $ProgressPreference = "SilentlyContinue" # Windows PowerShell's Invoke-WebRequest crawls with the progress bar on
+    - $env:CARGO_HOME = "$env:USERPROFILE\.cargo"
+    # The runner service keeps the PATH it started with, so tools installed by earlier jobs aren't on it
+    - $env:Path = "C:\Program Files\nodejs;$env:CARGO_HOME\bin;$env:Path"
+    - |
+      if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not ((node --version) -like "v$env:NODE_MAJOR.*")) {
+        $v = ((Invoke-RestMethod https://nodejs.org/dist/index.json) | Where-Object { $_.version -like "v$env:NODE_MAJOR.*" } | Select-Object -First 1).version
+        Invoke-WebRequest "https://nodejs.org/dist/$v/node-$v-x64.msi" -OutFile node.msi
+        Start-Process msiexec.exe -Wait -ArgumentList '/i', 'node.msi', '/qn'
+      }
+    - |
+      if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+        Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
+        .\rustup-init.exe -y --profile minimal --default-host x86_64-pc-windows-msvc
+      }
+    - rustup target add $env:RUST_TARGET
+    - npm ci --prefer-offline --no-audit
+  script:
+    - npx tauri build --target $env:RUST_TARGET --bundles nsis
+    - if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  artifacts:
+    paths: [target/*/release/bundle/nsis/*.exe]
+
+package:windows:x64:
+  extends: .package:windows
+  variables: { RUST_TARGET: x86_64-pc-windows-msvc }
+
+# ARM64 cross-compile on the x64 runner: needs the VS 2022 "MSVC v143 ARM64 build tools" component on the host.
+package:windows:arm64:
+  extends: .package:windows
+  variables: { RUST_TARGET: aarch64-pc-windows-msvc }
